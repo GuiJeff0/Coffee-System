@@ -10,4 +10,3 @@ create table user(
 
 );
 
-insert into user(name,contactNumber, email, password, status, role) values('Guilherme', '71985061121', 'guilherme@gmail.com', '123456', 'true', 'admin' );
