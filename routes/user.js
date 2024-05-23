@@ -4,9 +4,15 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const nodemailer = require('nodemailer');
-require('dotenv').config();
 
-const connection = require('../connection'); // Certifique-se de que o caminho está correto
+if (process.env.NODE_ENV !== 'production') {
+    require('dotenv').config();
+}
+
+const auth = require('../services/authentication');
+const checkRole = require('../services/checkRole');
+
+const connection = require('../connection');
 const router = express.Router();
 
 // Middleware para validar dados de entrada
@@ -31,7 +37,7 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// Função para verificar se o usuário já existe
+// Funções auxiliares para interações com o banco de dados
 const userExists = async (email) => {
     return new Promise((resolve, reject) => {
         const query = "SELECT email FROM user WHERE email=?";
@@ -42,7 +48,6 @@ const userExists = async (email) => {
     });
 };
 
-// Função para criar um novo usuário
 const createUser = async (name, contactNumber, email, password) => {
     return new Promise((resolve, reject) => {
         const query = "INSERT INTO user (name, contactNumber, email, password, status, role) VALUES (?, ?, ?, ?, 'false', 'user')";
@@ -53,7 +58,6 @@ const createUser = async (name, contactNumber, email, password) => {
     });
 };
 
-// Função para encontrar um usuário por email
 const findUserByEmail = async (email) => {
     return new Promise((resolve, reject) => {
         const query = "SELECT id, email, password, role, status FROM user WHERE email=?";
@@ -74,15 +78,11 @@ router.post('/signup', validateSignup, async (req, res) => {
     const { name, contactNumber, email, password } = req.body;
 
     try {
-        // Verificar se o usuário já existe
         if (await userExists(email)) {
             return res.status(400).json({ message: "Email já existe" });
         }
 
-        // Hash da senha
         const hashedPassword = await bcrypt.hash(password, 10);
-
-        // Inserir o novo usuário no banco de dados
         await createUser(name, contactNumber, email, hashedPassword);
 
         res.status(200).json({ message: "Registrado com sucesso" });
@@ -101,21 +101,17 @@ router.post('/login', validateLogin, async (req, res) => {
     const { email, password } = req.body;
 
     try {
-        // Verificar se o usuário existe
         const user = await findUserByEmail(email);
         if (user.length === 0) {
             return res.status(401).json({ message: "E-mail ou senha incorretos" });
         }
 
-        // Comparar a senha fornecida com a armazenada no banco de dados
         const validPassword = await bcrypt.compare(password, user[0].password);
         if (!validPassword) {
             return res.status(401).json({ message: "E-mail ou senha incorretos" });
         }
 
-        // Gerar um token JWT
-        const token = jwt.sign({ userId: user[0].id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-
+        const token = jwt.sign({ userId: user[0].id }, process.env.ACCESS_TOKEN, { expiresIn: '1h' });
         res.status(200).json({ message: "Login bem-sucedido", token });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -132,7 +128,7 @@ router.post('/forgotpassword', async (req, res) => {
             return res.status(404).json({ message: "Usuário não encontrado" });
         }
 
-        const resetToken = jwt.sign({ userId: user[0].id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        const resetToken = jwt.sign({ userId: user[0].id }, process.env.ACCESS_TOKEN, { expiresIn: '1h' });
 
         const mailOptions = {
             from: process.env.EMAIL,
@@ -152,5 +148,39 @@ router.post('/forgotpassword', async (req, res) => {
     }
 });
 
+// Rota para obter todos os usuários
+router.get('/get', auth.authenticateToken, (req, res) => {
+    const query = "SELECT id, name, email, contactNumber, status FROM user WHERE role ='user'";
+    connection.query(query, (err, results) => {
+        if (!err) {
+            return res.status(200).json(results);
+        } else {
+            return res.status(500).json(err);
+        }
+    });
+});
+
+// Rota para atualizar o status do usuário
+router.patch('/update', auth.authenticateToken, (req, res) => {
+    let user = req.body;
+    const query = "UPDATE user SET status=? WHERE id=?";
+    connection.query(query, [user.status, user.id], (err, results) => {
+        if (!err) {
+            if (results.affectedRows == 0) {
+                return res.status(404).json({ message: "ID do usuário não encontrado" });
+            }
+            return res.status(200).json({ message: "Status do usuário atualizado com sucesso" });
+        } else {
+            return res.status(500).json(err);
+        }
+    });
+});
+
+// Rota para verificar o token
+router.get('/checkToken', auth.authenticateToken, (req, res) => {
+    return res.status(200).json({ message: "true" });
+});
+
 module.exports = router;
+
 
